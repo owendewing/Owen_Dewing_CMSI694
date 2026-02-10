@@ -1,13 +1,9 @@
-# Last FM API Exploration (Time-Series Friendly)
+import requests
+from datetime import datetime
+import pandas as pd
 
 API_KEY = "d064ed9e95ce09817ac0384d1c31c6c7"
-
-import requests
-from pprint import pprint
-from datetime import datetime
-
 BASE_URL = "https://ws.audioscrobbler.com/2.0/"
-USERNAME = "odew2"
 
 
 def lastfm_request(params):
@@ -20,42 +16,33 @@ def lastfm_request(params):
     return response.json()
 
 
-# --- Profile info (static metadata) ---
-def get_user_info():
-    return lastfm_request({
-        "method": "user.getInfo",
-        "user": USERNAME
-    })
-
-
-# --- Recently played tracks (CORE DATASET) ---
-def get_recent_tracks(limit=200, page=1):
-    """
-    Returns timestamped listening history.
-    This is the backbone of preference evolution analysis.
-    """
-    return lastfm_request({
+def get_recent_tracks(username, limit=200, page=1, from_ts=None, to_ts=None):
+    params = {
         "method": "user.getRecentTracks",
-        "user": USERNAME,
+        "user": username,
         "limit": limit,
         "page": page
-    })
+    }
+
+    if from_ts:
+        params["from"] = from_ts
+    if to_ts:
+        params["to"] = to_ts
+
+    return lastfm_request(params)
 
 
-# --- Parse recent tracks into structured time-series records ---
 def parse_recent_tracks(raw):
-    """
-    Converts Last.fm response into analysis-ready records.
-    """
     records = []
-
     tracks = raw["recenttracks"]["track"]
+
     for track in tracks:
-        # Skip "now playing" track (no timestamp yet)
+        # Skip "now playing"
         if "@attr" in track and track["@attr"].get("nowplaying") == "true":
             continue
 
         unix_ts = int(track["date"]["uts"])
+
         records.append({
             "track": track["name"],
             "artist": track["artist"]["#text"],
@@ -68,34 +55,37 @@ def parse_recent_tracks(raw):
     return records
 
 
-# --- Pull multiple pages for deeper history ---
-def collect_listening_history(pages=5, limit=200):
-    """
-    Collects several pages of listening history.
-    Each page goes further back in time.
-    """
+def collect_listening_history(username, pages=5, limit=200, from_ts=None, to_ts=None):
     all_records = []
 
     for page in range(1, pages + 1):
-        raw = get_recent_tracks(limit=limit, page=page)
+        raw = get_recent_tracks(
+            username=username,
+            limit=limit,
+            page=page,
+            from_ts=from_ts,
+            to_ts=to_ts
+        )
         records = parse_recent_tracks(raw)
         all_records.extend(records)
 
     return all_records
 
 
-# --- Example usage ---
+def save_to_csv(records, filename):
+    df = pd.DataFrame(records)
+    df.sort_values("datetime", inplace=True)
+    df.to_csv(filename, index=False)
+    return df
+
+
 if __name__ == "__main__":
-    print("\n--- USER INFO ---")
-    pprint(get_user_info())
+    USERNAME = "odew2"
+    PAGES = 8     
 
-    print("\n--- COLLECTING LISTENING HISTORY ---")
-    history = collect_listening_history(pages=3)
+    history = collect_listening_history(USERNAME, pages=PAGES, from_ts=1767225600, to_ts=1769903999)
 
-    print(f"Collected {len(history)} timestamped listens\n")
+    df = save_to_csv(history, f"{USERNAME}_listening_history.csv")
 
-    print("--- SAMPLE RECORDS ---")
-    for row in history[:25]:
-        print(
-            f"{row['datetime']} | {row['artist']} – {row['track']}"
-        )
+    print(f"Collected {len(df)} listens")
+    print(df.head())
