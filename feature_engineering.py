@@ -109,6 +109,7 @@ def engineer_weekly_features(df):
         )
     ]
 
+
     # ---- Diversity acceleration ----
     features["entropy_delta"] = features["artist_entropy"].diff()
 
