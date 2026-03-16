@@ -38,7 +38,7 @@ export default function Login({ onLogin }: { onLogin: () => void }) {
             required
             value={username}
             onChange={(e) => setUsername(e.target.value)}
-            placeholder="odew2"
+            placeholder="my username"
           />
         </label>
 
@@ -47,7 +47,7 @@ export default function Login({ onLogin }: { onLogin: () => void }) {
           <input
             value={displayName}
             onChange={(e) => setDisplayName(e.target.value)}
-            placeholder="Owen"
+            placeholder="my name"
           />
         </label>
 
