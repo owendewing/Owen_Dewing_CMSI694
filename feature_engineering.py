@@ -2,6 +2,7 @@ import os
 import glob
 import pandas as pd
 import numpy as np
+from spotify_client import build_genre_map, attach_genres
 
 # -----------------------------
 # Load & Time Features
@@ -85,7 +86,9 @@ def engineer_weekly_features(df):
         "total_listens": weekly.size(),
         "unique_artists": weekly["artist"].nunique(),
         "unique_tracks": weekly["track"].nunique(),
+        "unique_genres": weekly["primary_genre"].nunique(),
         "artist_entropy": weekly["artist"].apply(shannon_entropy),
+        "genre_entropy": weekly["primary_genre"].apply(shannon_entropy),
         "top_artist_share": weekly["artist"].apply(top_share),
         "avg_listen_hour": weekly["hour"].mean(),
         "listen_hour_std": weekly["hour"].std(),
@@ -150,6 +153,29 @@ def identify_peak_periods(weekly_features, top_n=5):
 
     return peaks, valleys
 
+from collections import Counter
+
+def build_genre_transition_matrix(df):
+
+    genres = df["primary_genre"].tolist()
+
+    transitions = Counter()
+
+    for i in range(len(genres) - 1):
+        pair = (genres[i], genres[i+1])
+        transitions[pair] += 1
+
+    matrix = pd.DataFrame(
+        [(a, b, c) for (a, b), c in transitions.items()],
+        columns=["from_genre", "to_genre", "count"]
+    )
+
+    matrix["probability"] = (
+        matrix.groupby("from_genre")["count"]
+        .transform(lambda x: x / x.sum())
+    )
+
+    return matrix
 
 # -----------------------------
 # Artist Lifespan Proxy
@@ -198,6 +224,11 @@ def engineer_monthly_features(df):
 
 def run_feature_engineering(scrobbles_folder, output_prefix):
     df = load_yearly_scrobbles(scrobbles_folder)
+
+    genre_map = build_genre_map(df)
+
+    df = attach_genres(df, genre_map)
+
     df = add_time_features(df)
 
     weekly = engineer_weekly_features(df)
@@ -211,6 +242,13 @@ def run_feature_engineering(scrobbles_folder, output_prefix):
     seasonal.to_csv(f"{output_prefix}_seasonal_features.csv", index=False)
     peaks.to_csv(f"{output_prefix}_peak_diversity_weeks.csv", index=False)
     valleys.to_csv(f"{output_prefix}_low_diversity_weeks.csv", index=False)
+
+    transition_matrix = build_genre_transition_matrix(df)
+
+    transition_matrix.to_csv(
+        f"{output_prefix}_genre_transition_matrix.csv",
+        index=False
+)
 
     print("Feature engineering complete.")
     print("Artist lifespan stats:", lifespan_stats)

@@ -12,19 +12,17 @@ export function Home({ onLogout }: HomeProps) {
       <p>
         Last.fm user: <strong>{user.lastfmUsername}</strong>
       </p>
-      <p>
-        Time zone: <strong>{user.timezone}</strong>
-      </p>
 
       <div className="card">
-        <h2>Next steps</h2>
+        <h2 style={{ marginTop: "0px" }}>Discover:</h2>
         <ul>
-          <li>Fetch listening history</li>
-          <li>Analyze time-of-day patterns</li>
-          <li>Detect taste shifts</li>
-          <li>Visualize listening modes</li>
+          <li>How your listening habits change and evolve</li>
+          <li>When you are most active and how that varies over time</li>
+          <li>Periods of musical exploration versus routine listening</li>
+          <li>Shifts in taste, diversity, and artist preference</li>
         </ul>
       </div>
+      <button>Fetch my Data</button>
       <button onClick={onLogout}>Log out</button>
     </div>
   );
