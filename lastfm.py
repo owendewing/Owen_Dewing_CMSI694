@@ -5,6 +5,8 @@ import requests
 import pandas as pd
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 
 API_KEY = "d064ed9e95ce09817ac0384d1c31c6c7"
 BASE_URL = "https://ws.audioscrobbler.com/2.0/"
@@ -14,6 +16,7 @@ PER_PAGE = 200
 # -----------------------------
 # Core Request (with retry)
 # -----------------------------
+session = requests.Session()
 
 def lastfm_request(params, retries=5, backoff=1.5):
     params.update({
@@ -23,16 +26,23 @@ def lastfm_request(params, retries=5, backoff=1.5):
 
     for attempt in range(retries):
         try:
-            response = requests.get(BASE_URL, params=params, timeout=10)
+            response = session.get(BASE_URL, params=params, timeout=10)
             response.raise_for_status()
             return response.json()
+
         except requests.exceptions.HTTPError as e:
             if response.status_code >= 500:
                 wait = backoff ** attempt
-                print(f"Server error {response.status_code}. Retrying in {wait:.1f}s...")
+                # print(f"Server error {response.status_code}. Retrying in {wait:.1f}s...")
                 time.sleep(wait)
             else:
                 raise e
+
+        except requests.exceptions.RequestException as e:
+            # catches timeouts, connection errors, etc.
+            wait = backoff ** attempt
+            # print(f"Request failed ({e}). Retrying in {wait:.1f}s...")
+            time.sleep(wait)
 
     raise RuntimeError("Max retries exceeded")
 
@@ -103,21 +113,27 @@ def collect_year(username, year):
     from_ts = int(datetime(year, 1, 1, tzinfo=timezone.utc).timestamp())
     to_ts = int(datetime(year, 12, 31, 23, 59, 59, tzinfo=timezone.utc).timestamp())
 
-    # First call to get total pages
     first = get_recent_tracks(username, 1, from_ts, to_ts)
     total_pages = int(first["recenttracks"]["@attr"]["totalPages"])
 
-    print(f"  {year}: {total_pages} pages")
+    # print(f"  {year}: {total_pages} pages")
 
     all_records = parse_tracks(first)
 
-    for page in range(2, total_pages + 1):
+    def fetch_page(page):
         raw = get_recent_tracks(username, page, from_ts, to_ts)
-        all_records.extend(parse_tracks(raw))
-        time.sleep(0.25)
+        return parse_tracks(raw)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [
+            executor.submit(fetch_page, page)
+            for page in range(2, total_pages + 1)
+        ]
+
+        for future in as_completed(futures):
+            all_records.extend(future.result())
 
     return all_records
-
 
 # -----------------------------
 # Main Pipeline
@@ -131,28 +147,50 @@ def run_yearly_ingestion(username):
     output_dir = f"{username}_scrobbles"
     os.makedirs(output_dir, exist_ok=True)
 
-    print(f"User registered in {start_year}")
-    print(f"Total scrobbles: {total_scrobbles}")
-    print(f"Saving yearly CSVs to: {output_dir}/")
+    # print(f"User registered in {start_year}")
+    # print(f"Total scrobbles: {total_scrobbles}")
+    # print(f"Saving yearly CSVs to: {output_dir}/")
 
-    for year in range(start_year, end_year + 1):
-        print(f"\nFetching {year}...")
-        records = collect_year(username, year)
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {
+            executor.submit(collect_year, username, year): year
+            for year in range(start_year, end_year + 1)
+        }
 
-        if not records:
-            print("  No listens this year.")
-            continue
+        for future in as_completed(futures):
+            year = futures[future]
+            # print(f"\nFinished fetching {year}")
 
-        df = pd.DataFrame(records)
-        df.sort_values("datetime", inplace=True)
+            records = future.result()
 
-        out_path = os.path.join(output_dir, f"{username}_{year}.csv")
-        df.to_csv(out_path, index=False)
+            if not records:
+                # print(f"  {year}: No listens.")
+                continue
 
-        print(f"  Saved {len(df)} listens")
+            df = pd.DataFrame(records)
+            df.sort_values("datetime", inplace=True)
+
+            out_path = os.path.join(output_dir, f"{username}_{year}.csv")
+            df.to_csv(out_path, index=False)
+
+            # print(f"  {year}: Saved {len(df)} listens")
+        
 
 
 
 if __name__ == "__main__":
-    USERNAME = "odew2"
-    run_yearly_ingestion(USERNAME)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Fetch Last.fm scrobbles by year.")
+    parser.add_argument(
+        "--username",
+        required=True,
+        help="Last.fm username (output goes to {username}_scrobbles/)",
+    )
+    args = parser.parse_args()
+
+    start = time.time()
+    run_yearly_ingestion(args.username)
+    end = time.time()
+
+    # print(f"\nTotal runtime: {end - start:.2f} seconds")
