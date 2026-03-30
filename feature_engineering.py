@@ -139,6 +139,45 @@ def engineer_seasonal_features(df):
     return features.reset_index()
 
 
+def engineer_seasonal_timeseries(df):
+    """Per calendar year + season (winter/spring/summer/fall) for longitudinal dashboards."""
+    df = df.copy()
+    df["cal_year"] = df["datetime"].dt.year
+    seasonal = df.groupby(["cal_year", "season"], sort=False)
+    features = pd.DataFrame({
+        "total_listens": seasonal.size(),
+        "unique_artists": seasonal["artist"].nunique(),
+        "unique_genres": seasonal["primary_genre"].nunique(),
+        "artist_entropy": seasonal["artist"].apply(shannon_entropy),
+        "genre_entropy": seasonal["primary_genre"].apply(shannon_entropy),
+        "top_artist_share": seasonal["artist"].apply(top_share),
+        "avg_listen_hour": seasonal["hour"].mean(),
+    })
+    out = features.reset_index()
+    out.rename(columns={"cal_year": "year"}, inplace=True)
+    season_order = {"winter": 0, "spring": 1, "summer": 2, "fall": 3}
+    out["_so"] = out["season"].map(season_order)
+    out.sort_values(["year", "_so"], inplace=True)
+    out.drop(columns=["_so"], inplace=True)
+    return out.reset_index(drop=True)
+
+
+def engineer_yearly_features(df):
+    yearly = df.groupby("year", sort=True)
+    features = pd.DataFrame({
+        "total_listens": yearly.size(),
+        "unique_artists": yearly["artist"].nunique(),
+        "unique_tracks": yearly["track"].nunique(),
+        "unique_genres": yearly["primary_genre"].nunique(),
+        "artist_entropy": yearly["artist"].apply(shannon_entropy),
+        "genre_entropy": yearly["primary_genre"].apply(shannon_entropy),
+        "top_artist_share": yearly["artist"].apply(top_share),
+        "avg_listen_hour": yearly["hour"].mean(),
+        "weekend_ratio": yearly["is_weekend"].mean(),
+    })
+    return features.reset_index()
+
+
 # -----------------------------
 # Peak / Valley Detection
 # -----------------------------
@@ -234,12 +273,16 @@ def run_feature_engineering(scrobbles_folder, output_prefix):
     weekly = engineer_weekly_features(df)
     monthly = engineer_monthly_features(df)
     seasonal = engineer_seasonal_features(df)
+    seasonal_ts = engineer_seasonal_timeseries(df)
+    yearly = engineer_yearly_features(df)
     peaks, valleys = identify_peak_periods(weekly)
     lifespan_stats = artist_lifespan_stats(df)
 
     weekly.to_csv(f"{output_prefix}_weekly_features.csv", index=False)
     monthly.to_csv(f"{output_prefix}_monthly_features.csv", index=False)
     seasonal.to_csv(f"{output_prefix}_seasonal_features.csv", index=False)
+    seasonal_ts.to_csv(f"{output_prefix}_seasonal_timeseries.csv", index=False)
+    yearly.to_csv(f"{output_prefix}_yearly_features.csv", index=False)
     peaks.to_csv(f"{output_prefix}_peak_diversity_weeks.csv", index=False)
     valleys.to_csv(f"{output_prefix}_low_diversity_weeks.csv", index=False)
 
@@ -250,8 +293,8 @@ def run_feature_engineering(scrobbles_folder, output_prefix):
         index=False
 )
 
-    print("Feature engineering complete.")
-    print("Artist lifespan stats:", lifespan_stats)
+    # print("Feature engineering complete.")
+    # print("Artist lifespan stats:", lifespan_stats)
 
 
 # -----------------------------
@@ -259,7 +302,19 @@ def run_feature_engineering(scrobbles_folder, output_prefix):
 # -----------------------------
 
 if __name__ == "__main__":
-    SCROBBLES_FOLDER = "odew2_scrobbles"
-    OUTPUT_PREFIX = "odew2"
+    import argparse
 
-    run_feature_engineering(SCROBBLES_FOLDER, OUTPUT_PREFIX)
+    parser = argparse.ArgumentParser(description="Build listening features from scrobble CSVs.")
+    parser.add_argument(
+        "--scrobbles-folder",
+        required=True,
+        help="Folder containing yearly CSV files from lastfm.py",
+    )
+    parser.add_argument(
+        "--output-prefix",
+        required=True,
+        help="Prefix for output CSVs (e.g. odew2 -> odew2_weekly_features.csv)",
+    )
+    args = parser.parse_args()
+
+    run_feature_engineering(args.scrobbles_folder, args.output_prefix)
