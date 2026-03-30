@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from dashboard_data import build_dashboard_payload
 
+
 ROOT = Path(__file__).resolve().parent
 
 app = FastAPI(title="Listening analytics pipeline")
