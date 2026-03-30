@@ -12,10 +12,6 @@ API_KEY = "d064ed9e95ce09817ac0384d1c31c6c7"
 BASE_URL = "https://ws.audioscrobbler.com/2.0/"
 PER_PAGE = 200
 
-
-# -----------------------------
-# Core Request (with retry)
-# -----------------------------
 session = requests.Session()
 
 def lastfm_request(params, retries=5, backoff=1.5):
