@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { hasFetchedLastfmUsernameBefore } from "./lastfmFetchMeta";
 
 const timeZones = Intl.supportedValuesOf("timeZone");
 
@@ -23,7 +24,8 @@ export default function Login({ onLogin }: { onLogin: () => void }) {
 
     localStorage.setItem("user", JSON.stringify(user));
     onLogin();
-    navigate("/");
+    const pipelineAutoStart = hasFetchedLastfmUsernameBefore(username.trim());
+    navigate("/", { state: { pipelineAutoStart } });
   }
 
   return (
