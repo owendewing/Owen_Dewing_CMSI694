@@ -52,9 +52,15 @@ def get_user_info(username):
         "method": "user.getInfo",
         "user": username
     })
+    if data.get("error"):
+        msg = data.get("message", "Unknown Last.fm error")
+        raise ValueError(f"Last.fm: {msg}")
+    user = data.get("user")
+    if not user:
+        raise ValueError("Last.fm user not found (empty response).")
 
-    registered = int(data["user"]["registered"]["unixtime"])
-    playcount = int(data["user"]["playcount"])
+    registered = int(user["registered"]["unixtime"])
+    playcount = int(user["playcount"])
 
     return registered, playcount
 
@@ -75,11 +81,22 @@ def get_recent_tracks(username, page, from_ts, to_ts):
 
 
 def parse_tracks(raw):
+    """Parse user.getRecentTracks payload; handles 0 results and a single track object."""
     records = []
     pacific = ZoneInfo("America/Los_Angeles")
+    rt = raw.get("recenttracks") or {}
+    track_field = rt.get("track")
+    if not track_field:
+        return records
+    if isinstance(track_field, dict):
+        tracks = [track_field]
+    else:
+        tracks = track_field
 
-    for track in raw["recenttracks"]["track"]:
+    for track in tracks:
         if "@attr" in track and track["@attr"].get("nowplaying") == "true":
+            continue
+        if "date" not in track:
             continue
 
         ts = int(track["date"]["uts"])
@@ -110,15 +127,18 @@ def collect_year(username, year):
     to_ts = int(datetime(year, 12, 31, 23, 59, 59, tzinfo=timezone.utc).timestamp())
 
     first = get_recent_tracks(username, 1, from_ts, to_ts)
-    total_pages = int(first["recenttracks"]["@attr"]["totalPages"])
-
-    # print(f"  {year}: {total_pages} pages")
+    rt = first.get("recenttracks") or {}
+    attr = rt.get("@attr") or {}
+    total_pages = max(int(attr.get("totalPages", 1)), 1)
 
     all_records = parse_tracks(first)
 
     def fetch_page(page):
         raw = get_recent_tracks(username, page, from_ts, to_ts)
         return parse_tracks(raw)
+
+    if total_pages <= 1:
+        return all_records
 
     with ThreadPoolExecutor(max_workers=8) as executor:
         futures = [

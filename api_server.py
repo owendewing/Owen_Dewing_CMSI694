@@ -15,7 +15,6 @@ from pydantic import BaseModel, Field
 
 from dashboard_data import build_dashboard_payload
 
-
 ROOT = Path(__file__).resolve().parent
 
 app = FastAPI(title="Listening analytics pipeline")
@@ -36,25 +35,37 @@ class FetchBody(BaseModel):
 
 
 def run_step(script_args: list[str]) -> tuple[str, str]:
+    """
+    Run a pipeline script. Stdout is discarded to avoid OS pipe deadlocks when child
+    processes emit a lot of output (matplotlib, pandas, etc.); stderr is written to a
+    temp file and read back after the process exits.
+    """
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
-    proc = subprocess.run(
-        [sys.executable, *script_args],
-        cwd=str(ROOT),
-        env=env,
-        capture_output=True,
-        text=True,
-    )
+    stderr_path = ROOT / ".pipeline_step_stderr.log"
+    with open(stderr_path, "wb") as err_f:
+        proc = subprocess.run(
+            [sys.executable, *script_args],
+            cwd=str(ROOT),
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=err_f,
+        )
+    err_text = ""
+    try:
+        err_text = stderr_path.read_text(errors="replace")[-12000:]
+    except OSError:
+        err_text = ""
     if proc.returncode != 0:
         raise HTTPException(
             status_code=500,
             detail={
                 "step": script_args[0],
-                "stderr": (proc.stderr or "")[-12000:],
-                "stdout": (proc.stdout or "")[-12000:],
+                "stderr": err_text,
+                "stdout": "",
             },
         )
-    return proc.stdout, proc.stderr
+    return "", err_text
 
 
 @app.get("/api/health")

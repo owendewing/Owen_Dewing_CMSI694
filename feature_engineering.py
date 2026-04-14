@@ -36,6 +36,28 @@ def load_yearly_scrobbles(folder_path):
     return full_df
 
 
+LISTENING_HISTORY_COLS = [
+    "track",
+    "artist",
+    "album",
+    "unix_timestamp",
+    "datetime",
+    "url",
+]
+
+
+def export_listening_history_csv(raw_df: pd.DataFrame, output_prefix: str) -> None:
+    """
+    Single merged scrobble list for the dashboard (Top stuff time windows).
+    Rewritten on every pipeline run so it stays in sync with {prefix}_scrobbles/*.csv.
+    """
+    cols = [c for c in LISTENING_HISTORY_COLS if c in raw_df.columns]
+    if len(cols) < 4:
+        return
+    path = f"{output_prefix}_listening_history.csv"
+    raw_df[cols].sort_values("datetime").to_csv(path, index=False)
+
+
 def add_time_features(df):
     df["week"] = df["datetime"].dt.to_period("W").astype(str)
     df["month"] = df["datetime"].dt.to_period("M").astype(str)
@@ -263,6 +285,7 @@ def engineer_monthly_features(df):
 
 def run_feature_engineering(scrobbles_folder, output_prefix):
     df = load_yearly_scrobbles(scrobbles_folder)
+    export_listening_history_csv(df, output_prefix)
 
     genre_map = build_genre_map(df)
 
