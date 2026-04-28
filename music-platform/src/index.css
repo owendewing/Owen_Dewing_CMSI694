@@ -348,9 +348,73 @@ button.btn-secondary {
   grid-template-columns: 1fr;
 }
 
+.trends-intro {
+  margin: 0 0 1.1rem;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: #94a3b8;
+  text-align: left;
+  max-width: 72ch;
+}
+
+.trends-volume-wrap {
+  grid-column: 1 / -1;
+}
+
+.trends-volume-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.45rem;
+}
+
+.trends-variety-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+}
+
+.trends-zone-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.28rem 0.55rem;
+  border: 1px solid #334155;
+  border-radius: 999px;
+  background: #0b1220;
+  color: #e2e8f0;
+  font-size: 0.82rem;
+}
+
+.trends-zone-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px #0f172a;
+}
+
+.trends-range-hint {
+  margin: 0 0 0.65rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: #64748b;
+}
+
+.chart-block__before-viz {
+  margin-bottom: 0.35rem;
+}
+
+.trends-chart-fallback {
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+}
+
 @media (min-width: 900px) {
   .trends-grid--tabbed {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
   }
 
   .patterns-grid--tabbed {
@@ -516,7 +580,7 @@ button.btn-secondary {
 
 @media (min-width: 900px) {
   .trends-grid {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
   }
 
   .patterns-grid {
@@ -553,6 +617,86 @@ button.btn-secondary {
   line-height: 1.45;
   color: #94a3b8;
   text-align: left;
+}
+
+.pattern-new-artist-ring {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 200px;
+  padding: 0.25rem 0 0.5rem;
+}
+
+.pattern-new-artist-ring svg {
+  max-width: 220px;
+  width: 100%;
+  height: auto;
+}
+
+.listening-radial-fallback {
+  min-height: 100px;
+  display: flex;
+  align-items: center;
+}
+
+.listen-hour-dial-layout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 1.25rem 1.75rem;
+  min-height: 220px;
+  padding: 0.35rem 0 0.5rem;
+}
+
+.listen-hour-dial {
+  width: min(100%, 280px);
+  height: auto;
+  flex: 0 0 auto;
+  filter: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.45));
+}
+
+.listen-hour-caption {
+  width: 100%;
+  text-align: center;
+  margin-top: -0.35rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #cbd5e1;
+}
+
+.chart-viz-center {
+  height: 100%;
+  min-height: 200px;
+  display: flex;
+  align-items: center;
+}
+
+.listen-hour-stats {
+  margin: 0;
+  min-width: 200px;
+  text-align: left;
+}
+
+.listen-hour-stats dt {
+  margin: 0 0 0.2rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.listen-hour-stats dd {
+  margin: 0 0 1rem;
+  font-size: 1.65rem;
+  font-weight: 800;
+  color: #f1f5f9;
+  line-height: 1.15;
+}
+
+.listen-hour-stats dd:last-of-type {
+  margin-bottom: 0;
 }
 
 .tops-grid {

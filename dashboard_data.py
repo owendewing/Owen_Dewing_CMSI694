@@ -94,7 +94,7 @@ def _weekend_split_payload(weekly: pd.DataFrame | None, tail_weeks: int = 52) ->
     return {
         "weekendPercent": round(r * 100, 1),
         "weekdayPercent": round((1.0 - r) * 100, 1),
-        "detail": f"Estimated from your last {len(w)} weeks: share of scrobbles on Saturday–Sunday vs Monday–Friday.",
+        "detail": f"Your average listening split between weekdays and weekends.",
     }
 
 
@@ -105,6 +105,119 @@ def _empty_top_window(label: str) -> dict[str, Any]:
         "topTracks": [],
         "windowLabel": label,
     }
+
+
+def _listening_volume_by_ranges(path: Path) -> dict[str, Any]:
+    """
+    Bar-chart friendly play counts from raw scrobbles: last week (by day),
+    last month (by day), last year (by calendar month), all time (by year).
+    """
+    empty_block = {"rangeLabel": "", "bars": []}
+    out: dict[str, Any] = {
+        "lastWeek": dict(empty_block),
+        "lastMonth": dict(empty_block),
+        "lastYear": dict(empty_block),
+        "allTime": dict(empty_block),
+    }
+    df = _load_listening_history_df(path)
+    if df is None or df.empty:
+        return out
+
+    ts = pd.to_datetime(df["datetime"], errors="coerce", utc=True)
+    df = df.loc[ts.notna()].copy()
+    if df.empty:
+        return out
+    df["_date"] = ts.dt.date
+    anchor = df["_date"].max()
+
+    def _day_label(d) -> str:
+        td = pd.Timestamp(d)
+        return f"{td.strftime('%a')} {td.month}/{td.day}"
+
+    # --- Last 7 calendar days (inclusive) ---
+    start_w = anchor - pd.Timedelta(days=6)
+    dr_w = pd.date_range(pd.Timestamp(start_w), pd.Timestamp(anchor), freq="D")
+    sub_w = df[(df["_date"] >= start_w) & (df["_date"] <= anchor)]
+    cnt_w = sub_w.groupby("_date").size()
+    bars_w = [{"label": _day_label(pd.Timestamp(d).date()), "plays": int(cnt_w.get(d.date(), 0))} for d in dr_w]
+    out["lastWeek"] = {
+        "rangeLabel": f"{start_w.strftime('%b %d')} – {anchor.strftime('%b %d, %Y')}",
+        "bars": bars_w,
+    }
+
+    # --- Last 30 calendar days ---
+    start_m = anchor - pd.Timedelta(days=29)
+    dr_m = pd.date_range(pd.Timestamp(start_m), pd.Timestamp(anchor), freq="D")
+    sub_m = df[(df["_date"] >= start_m) & (df["_date"] <= anchor)]
+    cnt_m = sub_m.groupby("_date").size()
+    bars_m = [{"label": _day_label(pd.Timestamp(d).date()), "plays": int(cnt_m.get(d.date(), 0))} for d in dr_m]
+    out["lastMonth"] = {
+        "rangeLabel": f"{start_m.strftime('%b %d')} – {anchor.strftime('%b %d, %Y')}",
+        "bars": bars_m,
+    }
+
+    # --- Last ~12 months: calendar month buckets in trailing 365 days ---
+    start_y = anchor - pd.Timedelta(days=364)
+    sub_y = df[(df["_date"] >= start_y) & (df["_date"] <= anchor)].copy()
+    if not sub_y.empty:
+        sub_y["_period"] = pd.to_datetime(sub_y["_date"]).dt.to_period("M")
+        g = sub_y.groupby("_period", sort=True).size()
+        bars_y = [
+            {"label": f"{p.strftime('%b')} {p.year}", "plays": int(v)}
+            for p, v in g.items()
+        ]
+    else:
+        bars_y = []
+    out["lastYear"] = {
+        "rangeLabel": f"Months in the last year of data ({start_y.strftime('%b %Y')} – {anchor.strftime('%b %Y')})",
+        "bars": bars_y,
+    }
+
+    # --- All time by calendar year ---
+    df["_y"] = pd.to_datetime(df["_date"]).dt.year
+    g_y = df.groupby("_y", sort=True).size()
+    bars_at = [{"label": str(int(y)), "plays": int(v)} for y, v in g_y.items()]
+    out["allTime"] = {
+        "rangeLabel": f"{int(g_y.index.min())} – {int(g_y.index.max())} (calendar years)",
+        "bars": bars_at,
+    }
+
+    return out
+
+
+def _listening_by_hour(path: Path) -> dict[str, Any]:
+    """Count scrobbles per clock hour (0–23) for radial 'listening clock' UI."""
+    hours_out = [{"hour": h, "plays": 0} for h in range(24)]
+    out: dict[str, Any] = {
+        "hours": hours_out,
+        "busiestHour": None,
+        "busiestHourPlays": 0,
+        "busiestHourLabel": None,
+    }
+    df = _load_listening_history_df(path)
+    if df is None or df.empty:
+        return out
+    ts = pd.to_datetime(df["datetime"], errors="coerce", utc=True)
+    ts = ts.loc[ts.notna()]
+    if ts.empty:
+        return out
+    hr = ts.dt.hour
+    vc = hr.value_counts().reindex(range(24), fill_value=0).astype(int)
+    out["hours"] = [{"hour": h, "plays": int(vc[h])} for h in range(24)]
+    bp = int(vc.max())
+    if bp <= 0:
+        return out
+    busiest = int(vc.idxmax())
+
+    def _fmt_ampm(h: int) -> str:
+        am = h < 12
+        h12 = h % 12 or 12
+        return f"{h12}:00 {'AM' if am else 'PM'}"
+
+    out["busiestHour"] = busiest
+    out["busiestHourPlays"] = bp
+    out["busiestHourLabel"] = _fmt_ampm(busiest)
+    return out
 
 
 def _load_listening_history_df(path: Path) -> pd.DataFrame | None:
@@ -360,19 +473,19 @@ def _build_personality_cards(
                 elif discovered > 0:
                     cards.append(
                         {
-                            "headline": f"You folded in about {discovered} new-to-the-week artists in {last_month}",
+                            "headline": f"You brought in about {discovered} artists this week {last_month} who weren't in your rotation the week before",
                             "detail": "We count artists who show up in a week but not the week before — a simple discovery signal.",
                             "kind": "info",
                         }
                     )
-            elif discovered > 0:
-                cards.append(
-                    {
-                        "headline": f"You folded in about {discovered} new-to-the-week artists in {last_month}",
-                        "detail": "We count artists who show up in a week but not the week before — a simple discovery signal.",
-                        "kind": "info",
-                    }
-                )
+            # elif discovered > 0:
+            #     cards.append(
+            #         {
+            #             "headline": f"You folded in about {discovered} new-to-the-week artists in {last_month}",
+            #             "detail": "We count artists who show up in a week but not the week before — a simple discovery signal.",
+            #             "kind": "info",
+            #         }
+            #     )
 
     if share is not None:
         if share >= 0.35:
@@ -638,7 +751,10 @@ def build_dashboard_payload(root: Path, username: str) -> dict[str, Any]:
         weekly, monthly, seasonal_profile, seasonal_ts, yearly, clustered, peaks, transition, u
     )
 
-    top_stuff = _build_top_stuff_by_windows(root / f"{u}_listening_history.csv")
+    history_path = root / f"{u}_listening_history.csv"
+    top_stuff = _build_top_stuff_by_windows(history_path)
+    listening_volume_by_range = _listening_volume_by_ranges(history_path)
+    listening_by_hour = _listening_by_hour(history_path)
     trends_monthly = _trends_monthly_payload(monthly, weekly)
     personality_cards = _build_personality_cards(
         weekly, monthly, seasonal_profile, yearly
@@ -686,6 +802,8 @@ def build_dashboard_payload(root: Path, username: str) -> dict[str, Any]:
         "insights": insights,
         "personalityCards": personality_cards,
         "trendsMonthly": trends_monthly,
+        "listeningVolumeByRange": listening_volume_by_range,
+        "listeningByHour": listening_by_hour,
         "weekendListening": weekend_listening,
         "topStuff": top_stuff,
         "plots": {
