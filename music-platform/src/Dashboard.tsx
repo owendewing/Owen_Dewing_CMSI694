@@ -3,8 +3,12 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   Line,
   LineChart,
+  Pie,
+  PieChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -23,6 +27,28 @@ export type TrendsMonthlyRow = {
   artist_entropy: number;
   new_artists: number;
   discovery_rate: number;
+};
+
+export type VolumeBarRow = { label: string; plays: number };
+
+export type ListeningVolumeBlock = {
+  rangeLabel: string;
+  bars: VolumeBarRow[];
+};
+
+export type ListeningVolumeByRange = {
+  lastWeek: ListeningVolumeBlock;
+  lastMonth: ListeningVolumeBlock;
+  lastYear: ListeningVolumeBlock;
+  allTime: ListeningVolumeBlock;
+};
+
+export type YearlyListenRow = {
+  year: number;
+  total_listens: number;
+  avg_listen_hour: number | null;
+  unique_genres: number | null;
+  genre_entropy: number | null;
 };
 
 export type TopArtistRow = {
@@ -63,8 +89,13 @@ export type DashboardPayload = {
   hasData: boolean;
   dateRange: { start: string; end: string } | null;
   seasonalProfile: Record<string, unknown>[];
+  /** Raw weekly feature rows from the pipeline (snake_case keys). */
+  weekly?: Record<string, unknown>[];
   personalityCards?: PersonalityCard[];
   trendsMonthly?: TrendsMonthlyRow[];
+  yearly?: Record<string, unknown>[];
+  /** Day / month / year buckets from listening history for the volume chart. */
+  listeningVolumeByRange?: ListeningVolumeByRange;
   weekendListening?: WeekendListening | null;
   topStuff?: {
     week: TopStuffWindow;
@@ -88,14 +119,29 @@ const tooltipProps = {
 
 const SEASON_ORDER = ["winter", "spring", "summer", "fall"];
 
+const SEASON_DISPLAY: Record<string, { name: string; fill: string }> = {
+  winter: { name: "Winter", fill: "#38bdf8" },
+  spring: { name: "Spring", fill: "#4ade80" },
+  summer: { name: "Summer", fill: "#fbbf24" },
+  fall: { name: "Fall", fill: "#fb923c" },
+};
+
 type MainTabId = "personality" | "trends" | "patterns" | "tops";
 type TopRangeId = "week" | "month" | "year";
+type VolumeRangeId = "lastWeek" | "lastMonth" | "lastYear" | "allTime";
+
+const VOLUME_RANGE_TABS: { id: VolumeRangeId; label: string }[] = [
+  { id: "lastWeek", label: "Last 7 days" },
+  { id: "lastMonth", label: "Last 30 days" },
+  { id: "lastYear", label: "Last 12 months" },
+  { id: "allTime", label: "All years" },
+];
 
 const MAIN_TABS: { id: MainTabId; label: string }[] = [
+  { id: "tops", label: "My stuff" },
   { id: "personality", label: "Listening personality" },
   { id: "trends", label: "Trends over time" },
   { id: "patterns", label: "Patterns" },
-  { id: "tops", label: "My  stuff" },
 ];
 
 const TOP_RANGE_TABS: { id: TopRangeId; label: string }[] = [
@@ -104,18 +150,196 @@ const TOP_RANGE_TABS: { id: TopRangeId; label: string }[] = [
   { id: "year", label: "Last 365 days" },
 ];
 
+function numOrNull(v: unknown): number | null {
+  if (v == null || v === "") return null;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function meanWeeklyColumn(weekly: Record<string, unknown>[], col: string): number | null {
+  const nums = weekly
+    .map((r) => numOrNull(r[col]))
+    .filter((x): x is number => x != null);
+  if (nums.length === 0) return null;
+  return nums.reduce((a, b) => a + b, 0) / nums.length;
+}
+
+function quantile(sorted: number[], q: number): number | null {
+  if (sorted.length === 0) return null;
+  const pos = (sorted.length - 1) * q;
+  const base = Math.floor(pos);
+  const rest = pos - base;
+  const a = sorted[base];
+  const b = sorted[Math.min(sorted.length - 1, base + 1)];
+  return a + (b - a) * rest;
+}
+
+type VarietyZone = "Loyalist" | "Balanced" | "Explorer";
+
+function varietyZone(score: number, tLow: number, tHigh: number): VarietyZone {
+  if (score < tLow) return "Loyalist";
+  if (score < tHigh) return "Balanced";
+  return "Explorer";
+}
+
+function zoneColor(z: VarietyZone): string {
+  if (z === "Explorer") return "#22c55e";
+  if (z === "Balanced") return "#38bdf8";
+  return "#f59e0b";
+}
+
+/** e.g. 14.25 -> "2:15 PM" */
+function formatClockHour(decimalHour: number): string {
+  const total = Math.round(decimalHour * 60);
+  const h24 = Math.floor(total / 60) % 24;
+  const m = total % 60;
+  const period = h24 >= 12 ? "PM" : "AM";
+  const hh = h24 % 12 || 12;
+  return `${hh}:${m.toString().padStart(2, "0")} ${period}`;
+}
+
+function ListeningHourDial({
+  avgHour,
+}: {
+  avgHour: number;
+}) {
+  // The hand starts pointing at 12, and SVG positive rotation is clockwise (y axis down),
+  // so 1:00 should rotate +30 degrees, 3:00 -> +90, etc.
+  const angle = (avgHour % 12) * 30;
+  const shown = formatClockHour(avgHour);
+
+  return (
+    <div className="listen-hour-dial-layout">
+      <svg
+        className="listen-hour-dial"
+        viewBox="0 0 220 220"
+        role="img"
+        aria-label={`Average listening time about ${shown}`}
+      >
+        <defs>
+          <radialGradient id="dialFace" cx="35%" cy="30%" r="70%">
+            <stop offset="0%" stopColor="#1f2937" />
+            <stop offset="55%" stopColor="#0b1220" />
+            <stop offset="100%" stopColor="#020617" />
+          </radialGradient>
+        </defs>
+        <circle cx="110" cy="110" r="104" fill="url(#dialFace)" stroke="#334155" strokeWidth="2" />
+        <circle cx="110" cy="110" r="78" fill="#020617" stroke="#0f172a" strokeWidth="1.5" />
+        {Array.from({ length: 12 }, (_, i) => (
+          <g key={i} transform={`rotate(${i * 30} 110 110)`}>
+            <line
+              x1="110"
+              y1="14"
+              x2="110"
+              y2={i % 3 === 0 ? "30" : "24"}
+              stroke="#94a3b8"
+              strokeWidth={i % 3 === 0 ? 2.6 : 1.6}
+              strokeLinecap="round"
+              opacity={0.85}
+            />
+          </g>
+        ))}
+        {/* numerals (kept minimal to reduce clutter) */}
+        <text x="110" y="52" textAnchor="middle" fill="#e2e8f0" fontSize="14" fontWeight="700">
+          12
+        </text>
+        <text x="168" y="116" textAnchor="middle" fill="#e2e8f0" fontSize="14" fontWeight="700">
+          3
+        </text>
+        <text x="110" y="178" textAnchor="middle" fill="#e2e8f0" fontSize="14" fontWeight="700">
+          6
+        </text>
+        <text x="52" y="116" textAnchor="middle" fill="#e2e8f0" fontSize="14" fontWeight="700">
+          9
+        </text>
+        {/* hand */}
+        <g transform={`rotate(${angle} 110 110)`}>
+          <line
+            x1="110"
+            y1="110"
+            x2="110"
+            y2="42"
+            stroke="#60a5fa"
+            strokeWidth="5"
+            strokeLinecap="round"
+          />
+        </g>
+        <circle cx="110" cy="110" r="7" fill="#1e293b" stroke="#64748b" strokeWidth="1.5" />
+      </svg>
+      <div className="listen-hour-caption">Peak Listening Time {shown}</div>
+    </div>
+  );
+}
+
+function NewArtistRateRing({ rate }: { rate: number }) {
+  const r = 68;
+  const c = 2 * Math.PI * r;
+  const clamped = Math.min(1, Math.max(0, rate));
+  const dash = clamped * c;
+  const pct = (clamped * 100).toFixed(1);
+
+  return (
+    <div className="pattern-new-artist-ring">
+      <svg
+        viewBox="0 0 200 200"
+        width={200}
+        height={200}
+        role="img"
+        aria-label={`Average new artist rate ${pct} percent of plays per week`}
+      >
+        <circle cx="100" cy="100" r={r} fill="none" stroke="#1e293b" strokeWidth={14} />
+        <circle
+          cx="100"
+          cy="100"
+          r={r}
+          fill="none"
+          stroke="#a78bfa"
+          strokeWidth={14}
+          strokeLinecap="round"
+          strokeDasharray={`${dash} ${c}`}
+          transform="rotate(-90 100 100)"
+        />
+        <text
+          x="100"
+          y="100"
+          textAnchor="middle"
+          dominantBaseline="central"
+          fill="#f1f5f9"
+          fontSize="26"
+          fontWeight="700"
+        >
+          {pct}%
+        </text>
+        <text
+          x="100"
+          y="128"
+          textAnchor="middle"
+          fill="#94a3b8"
+          fontSize="11"
+        >
+          avg weekly rate
+        </text>
+      </svg>
+    </div>
+  );
+}
+
 function ChartBlock({
   headline,
   subtitle,
+  beforeViz,
   children,
 }: {
   headline: string;
   subtitle: string;
+  /** e.g. time-range tabs shown above the chart area */
+  beforeViz?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <div className="chart-block">
       <h3 className="chart-headline">{headline}</h3>
+      {beforeViz ? <div className="chart-block__before-viz">{beforeViz}</div> : null}
       <div className="chart-block__viz">{children}</div>
       <p className="chart-subtitle">{subtitle}</p>
     </div>
@@ -163,8 +387,10 @@ export function Dashboard({
   const [data, setData] = useState<DashboardPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [mainTab, setMainTab] = useState<MainTabId>("personality");
+  const [mainTab, setMainTab] = useState<MainTabId>("tops");
   const [topRange, setTopRange] = useState<TopRangeId>("week");
+  const [volumeRange, setVolumeRange] = useState<VolumeRangeId>("lastMonth");
+  const [monthlyRange, setMonthlyRange] = useState<"last6" | "last12" | "all">("last12");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -219,16 +445,74 @@ export function Dashboard({
     discovery: Number(row.new_artists) || 0,
   }));
 
+  const listeningVolume = data.listeningVolumeByRange;
+  const volumeBlock = listeningVolume?.[volumeRange];
+  const volumeBars = volumeBlock?.bars ?? [];
+  const volumeRangeHint = volumeBlock?.rangeLabel ?? "";
+
+  const volumeSubtitleByRange: Record<VolumeRangeId, string> = {
+    lastWeek:
+      "Each bar is one calendar day. A taller bar means more tracks logged that day — usually a heavier listening day.",
+    lastMonth:
+      "Each bar is one day over the last 30 days. Use this to spot streaks, quiet days, or weekends vs weekdays.",
+    lastYear:
+      "Each bar is one calendar month in your most recent year of history. Compare months to see seasons or busy periods.",
+    allTime:
+      "Each bar is a full calendar year. Great for seeing long-term growth or which years you leaned on music most.",
+  };
+
+  const slicedMonthly =
+    monthlyRange === "all"
+      ? trendsChart
+      : monthlyRange === "last6"
+        ? trendsChart.slice(-6)
+        : trendsChart.slice(-12);
+
+  const varietyChart = slicedMonthly.map((r) => ({
+    label: r.monthLabel,
+    score: r.variety,
+  }));
+
+  const varietyScores = varietyChart
+    .map((r) => r.score)
+    .filter((x) => Number.isFinite(x))
+    .sort((a, b) => a - b);
+  const tLow = quantile(varietyScores, 1 / 3) ?? 0;
+  const tHigh = quantile(varietyScores, 2 / 3) ?? tLow + 1;
+  const currentVariety = varietyChart.length ? varietyChart[varietyChart.length - 1].score : null;
+  const currentZone =
+    currentVariety != null ? varietyZone(currentVariety, tLow, tHigh) : null;
+
+  const varietyDomain = (() => {
+    const vals = varietyScores;
+    if (vals.length === 0) return ["auto", "auto"] as const;
+    const min = vals[0];
+    const max = vals[vals.length - 1];
+    const span = Math.max(0.15, max - min);
+    const pad = span * 0.15;
+    return [min - pad, max + pad] as const;
+  })();
+
+  const volumeTickAngle =
+    volumeRange === "lastMonth" ? -42 : volumeRange === "lastYear" ? -35 : 0;
+  const volumeChartHeight =
+    volumeRange === "lastMonth" ? 300 : volumeRange === "lastYear" ? 280 : 260;
+
   const seasonalProfileSorted = [...data.seasonalProfile].sort(
     (a, b) =>
       SEASON_ORDER.indexOf(String(a.season).toLowerCase()) -
       SEASON_ORDER.indexOf(String(b.season).toLowerCase()),
   );
-  const seasonalBars = seasonalProfileSorted.map((row) => ({
-    season: String(row.season).slice(0, 3).toUpperCase(),
-    fullSeason: String(row.season),
-    listens: Number(row.total_listens) || 0,
-  }));
+  const seasonalPie = seasonalProfileSorted.map((row) => {
+    const key = String(row.season).toLowerCase();
+    const meta = SEASON_DISPLAY[key] ?? { name: String(row.season), fill: "#94a3b8" };
+    return {
+      name: meta.name,
+      plays: Number(row.total_listens) || 0,
+      fill: meta.fill,
+    };
+  });
+  const seasonalPlaysTotal = seasonalPie.reduce((a, b) => a + b.plays, 0);
 
   const weekend = data.weekendListening;
   const weekendBars =
@@ -241,6 +525,34 @@ export function Dashboard({
           },
         ]
       : [];
+
+  const weeklyRows = data.weekly ?? [];
+
+  const meanNewArtistRate = meanWeeklyColumn(weeklyRows, "new_artist_rate");
+
+  const yearlyRaw = data.yearly ?? [];
+  const yearlyRows: YearlyListenRow[] = yearlyRaw
+    .map((r) => ({
+      year: Number(r.year),
+      total_listens: Number(r.total_listens) || 0,
+      avg_listen_hour: numOrNull(r.avg_listen_hour),
+      unique_genres: numOrNull(r.unique_genres),
+      genre_entropy: numOrNull(r.genre_entropy),
+    }))
+    .filter((r) => Number.isFinite(r.year));
+
+  const avgListenHourWeighted = (() => {
+    const rows = yearlyRows.filter((r) => r.avg_listen_hour != null && r.total_listens > 0);
+    if (rows.length === 0) return null;
+    const w = rows.reduce((a, b) => a + b.total_listens, 0);
+    if (w <= 0) return null;
+    const s = rows.reduce((a, b) => a + b.total_listens * (b.avg_listen_hour ?? 0), 0);
+    return s / w;
+  })();
+
+  const yearlyUniqueGenresChart = yearlyRows
+    .filter((r) => r.unique_genres != null)
+    .map((r) => ({ yearLabel: String(r.year), count: r.unique_genres as number }));
 
   const topStuff = data.topStuff;
   const topWindow = topStuff?.[topRange];
@@ -308,78 +620,225 @@ export function Dashboard({
                 <h2 id="trends-heading" className="dashboard-section-title">
                   Your trends over time
                 </h2>
+                {/* <p className="trends-intro">
+                  Three views of your Last.fm-style history: how often you hit play, how wide your artist mix was
+                  each month, and how many “new that week” artists showed up. Numbers come from your export — not a
+                  live stream.
+                </p> */}
                 <div className="trends-grid trends-grid--tabbed">
-                  <ChartBlock
-                    headline="How much you listened"
-                    subtitle="Total plays per month. Higher spikes usually mean more time with music that month."
-                  >
-                    <ResponsiveContainer width="100%" height={260}>
-                      <LineChart data={trendsChart} margin={{ left: 8, right: 8 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                        <XAxis dataKey="monthLabel" tick={{ fill: MUTED, fontSize: 11 }} />
-                        <YAxis tick={{ fill: MUTED, fontSize: 11 }} />
-                        <Tooltip
-                          {...tooltipProps}
-                          formatter={(value: number) => [`${value}`, "Listening volume"]}
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="listens"
-                          stroke={ACCENT}
-                          dot={false}
-                          name="Listening volume"
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </ChartBlock>
+                  <div className="trends-volume-wrap">
+                    <ChartBlock
+                      headline="How much you listened"
+                      subtitle={volumeSubtitleByRange[volumeRange]}
+                      beforeViz={
+                        <>
+                          <nav className="trends-volume-tabs" aria-label="Time range for plays">
+                            {VOLUME_RANGE_TABS.map((t) => (
+                              <button
+                                key={t.id}
+                                type="button"
+                                className={
+                                  volumeRange === t.id
+                                    ? "dash-tab dash-tab--sm dash-tab--active"
+                                    : "dash-tab dash-tab--sm"
+                                }
+                                onClick={() => setVolumeRange(t.id)}
+                              >
+                                {t.label}
+                              </button>
+                            ))}
+                          </nav>
+                          {volumeRangeHint ? (
+                            <p className="trends-range-hint">{volumeRangeHint}</p>
+                          ) : null}
+                        </>
+                      }
+                    >
+                      {volumeBars.length > 0 ? (
+                        <ResponsiveContainer width="100%" height={volumeChartHeight}>
+                          <BarChart
+                            data={volumeBars}
+                            margin={{
+                              left: 4,
+                              right: 8,
+                              top: 4,
+                              bottom: volumeTickAngle !== 0 ? 52 : 12,
+                            }}
+                          >
+                            <CartesianGrid strokeDasharray="3 3" stroke={GRID} vertical={false} />
+                            <XAxis
+                              dataKey="label"
+                              tick={{ fill: MUTED, fontSize: 10 }}
+                              interval={0}
+                              angle={volumeTickAngle}
+                              textAnchor="end"
+                              height={volumeTickAngle !== 0 ? 48 : 28}
+                            />
+                            <YAxis
+                              tick={{ fill: MUTED, fontSize: 11 }}
+                              allowDecimals={false}
+                              label={{
+                                value: "Plays",
+                                angle: -90,
+                                position: "insideLeft",
+                                fill: MUTED,
+                                fontSize: 11,
+                                offset: 4,
+                              }}
+                            />
+                            <Tooltip
+                              {...tooltipProps}
+                              formatter={(value: number) => [
+                                `${value.toLocaleString()} plays`,
+                              ]}
+                              labelFormatter={(label) => String(label)}
+                            />
+                            <Bar
+                              dataKey="plays"
+                              fill={ACCENT}
+                              name="Plays"
+                              radius={[5, 5, 0, 0]}
+                              maxBarSize={volumeRange === "lastMonth" ? 14 : 48}
+                            />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      ) : (
+                        <p className="dashboard-muted trends-chart-fallback">
+                          No day-level volume yet. Run <strong>Fetch my data</strong> so{" "}
+                          <code className="inline-code">{username}_listening_history.csv</code> exists next to your
+                          feature files.
+                        </p>
+                      )}
+                    </ChartBlock>
+                  </div>
 
                   <ChartBlock
-                    headline="Your music variety over time"
-                    subtitle="Variety scores how spread out your plays are across artists. Higher means a wider mix in the same number of listens."
+                    headline="Artist variety"
+                    subtitle="This line answers “am I exploring more artists lately?” Dots are labeled: Loyalist (repeat favorites), Balanced, Explorer (wider variety)."
+                    beforeViz={
+                      <div className="trends-variety-controls">
+                        <nav className="trends-volume-tabs" aria-label="Time range for monthly charts">
+                          <button
+                            type="button"
+                            className={
+                              monthlyRange === "last6"
+                                ? "dash-tab dash-tab--sm dash-tab--active"
+                                : "dash-tab dash-tab--sm"
+                            }
+                            onClick={() => setMonthlyRange("last6")}
+                          >
+                            Last 6 months
+                          </button>
+                          <button
+                            type="button"
+                            className={
+                              monthlyRange === "last12"
+                                ? "dash-tab dash-tab--sm dash-tab--active"
+                                : "dash-tab dash-tab--sm"
+                            }
+                            onClick={() => setMonthlyRange("last12")}
+                          >
+                            Last 12 months
+                          </button>
+                          <button
+                            type="button"
+                            className={
+                              monthlyRange === "all"
+                                ? "dash-tab dash-tab--sm dash-tab--active"
+                                : "dash-tab dash-tab--sm"
+                            }
+                            onClick={() => setMonthlyRange("all")}
+                          >
+                            All years
+                          </button>
+                        </nav>
+                        {currentZone ? (
+                          <div className="trends-zone-badge" style={{ borderColor: zoneColor(currentZone) }}>
+                            <span className="trends-zone-dot" style={{ background: zoneColor(currentZone) }} />
+                            Current: <strong>{currentZone}</strong>
+                          </div>
+                        ) : null}
+                      </div>
+                    }
                   >
-                    <ResponsiveContainer width="100%" height={260}>
-                      <LineChart data={trendsChart} margin={{ left: 8, right: 8 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                        <XAxis dataKey="monthLabel" tick={{ fill: MUTED, fontSize: 11 }} />
-                        <YAxis tick={{ fill: MUTED, fontSize: 11 }} />
-                        <Tooltip
-                          {...tooltipProps}
-                          formatter={(value: number) => [`${value.toFixed(2)}`, "Variety"]}
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="variety"
-                          stroke="#22d3ee"
-                          dot={false}
-                          name="Variety"
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
+                    {varietyChart.length > 0 ? (
+                      <ResponsiveContainer width="100%" height={260}>
+                        <LineChart data={varietyChart} margin={{ left: 8, right: 8, bottom: 28 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke={GRID} vertical={false} />
+                          <XAxis
+                            dataKey="label"
+                            tick={{ fill: MUTED, fontSize: 10 }}
+                            interval="preserveStartEnd"
+                            angle={-30}
+                            textAnchor="end"
+                            height={44}
+                          />
+                          <YAxis
+                            tick={{ fill: MUTED, fontSize: 11 }}
+                            domain={varietyDomain as any}
+                            tickFormatter={(v: number) => Number(v).toFixed(1)}
+                          />
+                          <ReferenceLine y={tLow} stroke="#f59e0b" strokeDasharray="4 4" />
+                          <ReferenceLine y={tHigh} stroke="#22c55e" strokeDasharray="4 4" />
+                          <Tooltip
+                            {...tooltipProps}
+                            formatter={(value: number) => [
+                              value.toFixed(2),
+                              "Variety (higher = wider artist mix)",
+                            ]}
+                            labelFormatter={(l) => `Month: ${l}`}
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey="score"
+                            stroke="#e2e8f0"
+                            strokeWidth={2}
+                            dot={(props: any) => {
+                              const score = Number(props?.payload?.score);
+                              const z = Number.isFinite(score) ? varietyZone(score, tLow, tHigh) : "Balanced";
+                              return (
+                                <circle
+                                  cx={props.cx}
+                                  cy={props.cy}
+                                  r={3.75}
+                                  fill={zoneColor(z)}
+                                  stroke="#0f172a"
+                                  strokeWidth={1}
+                                />
+                              );
+                            }}
+                            activeDot={{ r: 5 }}
+                            name="Variety"
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <p className="dashboard-muted">No monthly stats yet.</p>
+                    )}
                   </ChartBlock>
 
-                  <ChartBlock
-                    headline="Discovery each month"
-                    subtitle="Artists who appear in a week but not the week before, summed by month — a simple “new faces” signal, not first-time-ever in your library."
-                  >
-                    <ResponsiveContainer width="100%" height={260}>
-                      <LineChart data={trendsChart} margin={{ left: 8, right: 8 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                        <XAxis dataKey="monthLabel" tick={{ fill: MUTED, fontSize: 11 }} />
-                        <YAxis tick={{ fill: MUTED, fontSize: 11 }} />
-                        <Tooltip
-                          {...tooltipProps}
-                          formatter={(value: number) => [`${value}`, "Discovery (count)"]}
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="discovery"
-                          stroke="#f472b6"
-                          dot={false}
-                          name="Discovery"
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </ChartBlock>
+                  {yearlyUniqueGenresChart.length > 0 ? (
+                    <ChartBlock
+                      headline="How Many Genres You Explored"
+                      subtitle="A simple count of distinct genres seen in your listens per year."
+                    >
+                      <div className="chart-viz-center">
+                        <ResponsiveContainer width="100%" height={260}>
+                          <BarChart data={yearlyUniqueGenresChart} margin={{ left: 4, right: 8, bottom: 12 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke={GRID} vertical={false} />
+                            <XAxis dataKey="yearLabel" tick={{ fill: MUTED, fontSize: 11 }} />
+                            <YAxis tick={{ fill: MUTED, fontSize: 11 }} allowDecimals={false} />
+                            <Tooltip
+                              {...tooltipProps}
+                              formatter={(value: number) => [`${value.toLocaleString()} genres`, "Unique genres"]}
+                              labelFormatter={(l) => `Year: ${l}`}
+                            />
+                            <Bar dataKey="count" fill="#f59e0b" radius={[5, 5, 0, 0]} maxBarSize={52} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </ChartBlock>
+                  ) : null}
                 </div>
               </section>
             ) : null}
@@ -390,27 +849,81 @@ export function Dashboard({
                   Your patterns
                 </h2>
                 <div className="patterns-grid patterns-grid--tabbed">
-                  {seasonalBars.length > 0 ? (
+                  {meanNewArtistRate != null ? (
+                    <ChartBlock
+                      headline="New artist rate"
+                      subtitle="How much of your listening comes from new artist discoveries each week."
+                    >
+                      <NewArtistRateRing rate={meanNewArtistRate} />
+                    </ChartBlock>
+                  ) : null}
+
+                  <ChartBlock
+                    headline="When You Listen Most"
+                    subtitle="Your most active time of day for music listening."
+                  >
+                    {avgListenHourWeighted != null ? (
+                      <ListeningHourDial avgHour={avgListenHourWeighted} />
+                    ) : (
+                      <p className="dashboard-muted listening-radial-fallback">
+                        No yearly average listening hour available yet.
+                      </p>
+                    )}
+                  </ChartBlock>
+
+                  {seasonalPie.length > 0 ? (
                     <ChartBlock
                       headline="Seasonal listening"
-                      subtitle="Total plays across all years, grouped by season — good for spotting long-run habits."
+                      subtitle="Share of all your listens by season (winter = Dec–Feb, spring = Mar–May, summer = Jun–Aug, fall = Sep–Nov)."
                     >
-                      <ResponsiveContainer width="100%" height={260}>
-                        <BarChart data={seasonalBars} margin={{ left: 8, right: 8 }}>
-                          <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                          <XAxis dataKey="season" tick={{ fill: MUTED }} />
-                          <YAxis tick={{ fill: MUTED, fontSize: 11 }} />
+                      <ResponsiveContainer width="100%" height={280}>
+                        <PieChart margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+                          <Pie
+                            data={seasonalPie}
+                            dataKey="plays"
+                            nameKey="name"
+                            cx="50%"
+                            cy="50%"
+                            innerRadius="48%"
+                            outerRadius="78%"
+                            paddingAngle={2}
+                            stroke="#0f172a"
+                            strokeWidth={1}
+                            label={({ name, percent }) =>
+                              `${name} (${((percent ?? 0) * 100).toFixed(0)}%)`
+                            }
+                            labelLine={{ stroke: MUTED, strokeWidth: 1 }}
+                          >
+                            {seasonalPie.map((entry, i) => (
+                              <Cell key={`${entry.name}-${i}`} fill={entry.fill} />
+                            ))}
+                          </Pie>
                           <Tooltip
                             {...tooltipProps}
-                            formatter={(value: number) => [`${value} plays`, "Listening volume"]}
+                            content={({ active, payload }) => {
+                              if (!active || !payload?.length) return null;
+                              const row = payload[0].payload as {
+                                name: string;
+                                plays: number;
+                              };
+                              const pct =
+                                seasonalPlaysTotal > 0
+                                  ? ((row.plays / seasonalPlaysTotal) * 100).toFixed(1)
+                                  : "0";
+                              return (
+                                <div style={{ ...tooltipProps.contentStyle, minWidth: 160 }}>
+                                  <div style={{ fontWeight: 700, marginBottom: 6 }}>{row.name}</div>
+                                  <div style={{ fontSize: 13 }}>
+                                    {row.plays.toLocaleString()} plays
+                                  </div>
+                                  <div style={{ fontSize: 13, color: "#94a3b8", marginTop: 4 }}>
+                                    {pct}% of total listening
+                                  </div>
+                                </div>
+                              );
+                            }}
                           />
-                          <Bar
-                            dataKey="listens"
-                            fill={ACCENT}
-                            name="Listening volume"
-                            radius={[6, 6, 0, 0]}
-                          />
-                        </BarChart>
+                        </PieChart>
                       </ResponsiveContainer>
                     </ChartBlock>
                   ) : null}
