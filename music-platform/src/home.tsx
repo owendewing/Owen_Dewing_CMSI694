@@ -2,8 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Dashboard } from "./Dashboard";
 import {
+  getPipelineSuccessAt,
   hasFetchedLastfmUsernameBefore,
   recordLastfmUsernameFetched,
+  recordPipelineSuccessAt,
+  pipelineSuccessIsFresh,
 } from "./lastfmFetchMeta";
 
 type HomeProps = {
@@ -73,6 +76,7 @@ export function Home({ onLogout }: HomeProps) {
         }
 
         recordLastfmUsernameFetched(user.lastfmUsername);
+        recordPipelineSuccessAt(user.lastfmUsername);
         setHasDashboardData(true);
         setDashboardRevision((r) => r + 1);
         if (!silent) {
@@ -139,6 +143,22 @@ export function Home({ onLogout }: HomeProps) {
 
   const showFetchButton = hasDashboardData !== true;
 
+  const FRESH_MS = 45 * 60 * 1000;
+
+  const handleGetRecentData = useCallback(() => {
+    if (pipelineSuccessIsFresh(user.lastfmUsername, FRESH_MS)) {
+      const at = getPipelineSuccessAt(user.lastfmUsername);
+      const ago = at
+        ? `Last refresh: ${at.toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })}.`
+        : "";
+      setMessage(
+        `${ago} Your data is already up to date. Try again in a bit for another full refresh.`,
+      );
+      return;
+    }
+    void handleFetchData();
+  }, [user.lastfmUsername, handleFetchData]);
+
   return (
     <div className="page page--dashboard">
       <header className="home-header">
@@ -151,7 +171,7 @@ export function Home({ onLogout }: HomeProps) {
       <div className="card card--intro">
         <h2 className="home-h2">What you&apos;ll see</h2>
         <ul className="home-list">
-          <li>A short “listening personality” snapshot in plain language</li>
+          <li>Listening personality traits from your stats (simple cards)</li>
           <li>Volume, variety, and discovery trends over time</li>
           <li>Seasonal and weekend patterns, plus your top artists, albums, and tracks</li>
         </ul>
@@ -167,6 +187,16 @@ export function Home({ onLogout }: HomeProps) {
         {showFetchButton ? (
           <button type="button" onClick={() => void handleFetchData()} disabled={loading}>
             {loading ? "Running pipeline…" : "Fetch my data"}
+          </button>
+        ) : null}
+        {hasDashboardData ? (
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => void handleGetRecentData()}
+            disabled={loading}
+          >
+            {loading ? "Updating…" : "Get recent data"}
           </button>
         ) : null}
         <button type="button" className="btn-secondary" onClick={onLogout}>

@@ -21,3 +21,33 @@ export function recordLastfmUsernameFetched(username: string): void {
 export function hasFetchedLastfmUsernameBefore(username: string): boolean {
   return readFetchedLastfmUsernames().has(username.trim().toLowerCase());
 }
+
+const pipelineTsKey = (username: string) =>
+  `lastfmPipelineSuccessAt:${username.trim().toLowerCase()}`;
+
+/** Call after a successful full pipeline run. */
+export function recordPipelineSuccessAt(username: string): void {
+  try {
+    localStorage.setItem(pipelineTsKey(username), new Date().toISOString());
+  } catch {
+    /* ignore quota */
+  }
+}
+
+export function getPipelineSuccessAt(username: string): Date | null {
+  try {
+    const v = localStorage.getItem(pipelineTsKey(username));
+    if (!v) return null;
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? null : d;
+  } catch {
+    return null;
+  }
+}
+
+/** True if a successful run happened within maxAgeMs (used to skip redundant fetches). */
+export function pipelineSuccessIsFresh(username: string, maxAgeMs: number): boolean {
+  const d = getPipelineSuccessAt(username);
+  if (!d) return false;
+  return Date.now() - d.getTime() < maxAgeMs;
+}

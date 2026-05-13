@@ -571,6 +571,17 @@ button.btn-secondary {
   color: #94a3b8;
 }
 
+.personality-blurb {
+  margin: 0 0 1rem;
+  max-width: 52rem;
+}
+
+.personality-api-hint {
+  color: #fb923c;
+  font-size: 0.88em;
+  cursor: help;
+}
+
 .trends-grid,
 .patterns-grid {
   display: grid;
