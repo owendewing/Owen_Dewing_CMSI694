@@ -1,5 +1,5 @@
 """
-HTTP API to run the Last.fm ingest → Spotify genres → feature engineering → PCA pipeline.
+HTTP API to run the Last.fm ingest → Spotify genres → feature engineering pipeline.
 Start: uvicorn api_server:app --reload --host 127.0.0.1 --port 8000
 """
 
@@ -8,14 +8,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from dashboard_data import build_dashboard_payload
-
 ROOT = Path(__file__).resolve().parent
+load_dotenv(ROOT / ".env")
+
+from dashboard_data import build_dashboard_payload
 
 app = FastAPI(title="Listening analytics pipeline")
 app.add_middleware(
@@ -37,7 +38,7 @@ class FetchBody(BaseModel):
 def run_step(script_args: list[str]) -> tuple[str, str]:
     """
     Run a pipeline script. Stdout is discarded to avoid OS pipe deadlocks when child
-    processes emit a lot of output (matplotlib, pandas, etc.); stderr is written to a
+    processes emit a lot of output (pandas, APIs, etc.); stderr is written to a
     temp file and read back after the process exits.
     """
     env = os.environ.copy()
@@ -78,26 +79,10 @@ def get_dashboard(username: str):
     return build_dashboard_payload(ROOT, username.strip())
 
 
-_PLOT_SUFFIX = {"scatter": "_pca_scatter.png", "timeline": "_pca_timeline.png"}
-
-
-@app.get("/api/plots/{username}/{kind}")
-def serve_plot(username: str, kind: str):
-    suffix = _PLOT_SUFFIX.get(kind)
-    if not suffix:
-        raise HTTPException(status_code=404, detail="unknown plot")
-    u = username.strip()
-    filename = f"{u}{suffix}"
-    path = ROOT / filename
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="plot not found (run pipeline first)")
-    return FileResponse(path, media_type="image/png")
-
-
 @app.post("/api/fetch-data")
 def fetch_data(body: FetchBody):
     """
-    Runs: lastfm.py → spotify_client.py → feature_engineering.py → pca_cluster.py
+    Runs: lastfm.py → spotify_client.py → feature_engineering.py
     """
     username = body.username.strip()
     if not username:
@@ -113,7 +98,6 @@ def fetch_data(body: FetchBody):
             "--output-prefix",
             username,
         ],
-        ["pca_cluster.py", "--prefix", username],
     ]
 
     for script_args in steps:

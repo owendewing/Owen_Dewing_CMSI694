@@ -13,6 +13,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from listening_personality_ai import build_listening_personality
+
 
 def _read_csv_optional(path: Path) -> pd.DataFrame | None:
     if not path.exists():
@@ -404,12 +406,15 @@ def _build_top_stuff_by_windows(history_path: Path, top_n: int = 8) -> dict[str,
     return {"week": week, "month": month, "year": year}
 
 
-def _build_personality_cards(
+def _build_personality_trait_cards(
     weekly: pd.DataFrame | None,
     monthly: pd.DataFrame | None,
     seasonal_profile: pd.DataFrame | None,
     yearly: pd.DataFrame | None,
 ) -> list[dict[str, Any]]:
+    """
+    Short trait cards from engineered features (plain language, no jargon).
+    """
     cards: list[dict[str, Any]] = []
 
     if monthly is None or monthly.empty:
@@ -418,35 +423,37 @@ def _build_personality_cards(
     m = monthly.sort_values("month")
     last = m.iloc[-1]
     last_month = str(last["month"])
-    variety = _safe_float(last.get("artist_entropy"))
+    mix = _safe_float(last.get("artist_entropy"))
     share = _safe_float(last.get("top_artist_share"))
 
-    ent_series = m["artist_entropy"].dropna()
-    if len(ent_series) >= 2 and variety is not None:
-        q50 = float(ent_series.median())
-        q75 = float(ent_series.quantile(0.75))
-        if variety >= q75:
+    mix_series = m["artist_entropy"].dropna()
+    if len(mix_series) >= 2 and mix is not None:
+        q50 = float(mix_series.median())
+        q75 = float(mix_series.quantile(0.75))
+        if mix >= q75:
             cards.append(
                 {
-                    "headline": "You're a high-variety listener",
-                    "detail": f"In {last_month}, your mix of artists was wider than about three quarters of your other months. "
-                    "Higher variety means more different artists in the same number of plays.",
+                    "headline": "Wide artist mix recently",
+                    "detail": f"In {last_month}, you rotated through more different artists than about three quarters "
+                    f"of your other months (for similar play counts).",
                     "kind": "highlight",
                 }
             )
-        elif variety >= q50:
+        elif mix >= q50:
             cards.append(
                 {
-                    "headline": "You balance favorites with variety",
-                    "detail": f"In {last_month}, your artist mix sat around the middle of your own history — not too narrow, not maximal spread.",
+                    "headline": "Balanced listening",
+                    "detail": f"In {last_month}, how spread out your plays were across artists sat near the middle "
+                    "of your own history.",
                     "kind": "info",
                 }
             )
         else:
             cards.append(
                 {
-                    "headline": "You've been leaning into favorites",
-                    "detail": f"In {last_month}, fewer artists accounted for most of your plays compared with your typical month.",
+                    "headline": "Focused on favorites",
+                    "detail": f"In {last_month}, a smaller set of artists accounted for more of your plays than your "
+                    "typical month.",
                     "kind": "info",
                 }
             )
@@ -464,64 +471,58 @@ def _build_personality_cards(
                 if discovered >= med * 1.25 and discovered >= 5:
                     cards.append(
                         {
-                            "headline": "You explored more new artists than usual recently",
-                            "detail": f"In {last_month}, about {discovered} artist appearances were new compared with the prior week "
-                            "(summed across weeks). That's above your usual pace.",
+                            "headline": "Above-average new names",
+                            "detail": f"In {last_month}, more artists appeared that hadn’t shown up the week before "
+                            f"than your usual pace (about {discovered} summed across weeks).",
                             "kind": "highlight",
                         }
                     )
                 elif discovered > 0:
                     cards.append(
                         {
-                            "headline": f"You brought in about {discovered} artists this week {last_month} who weren't in your rotation the week before",
-                            "detail": "We count artists who show up in a week but not the week before — a simple discovery signal.",
+                            "headline": "Steady discovery",
+                            "detail": f"In {last_month}, about {discovered} artist-week slots were new compared with "
+                            "the prior week — artists cycling in week to week.",
                             "kind": "info",
                         }
                     )
-            # elif discovered > 0:
-            #     cards.append(
-            #         {
-            #             "headline": f"You folded in about {discovered} new-to-the-week artists in {last_month}",
-            #             "detail": "We count artists who show up in a week but not the week before — a simple discovery signal.",
-            #             "kind": "info",
-            #         }
-            #     )
 
     if share is not None:
         if share >= 0.35:
             cards.append(
                 {
-                    "headline": "You tend to loop your favorites",
-                    "detail": f"In {last_month}, your top artist alone accounted for about {share * 100:.0f}% of plays — a high repeat rate.",
+                    "headline": "Top artist dominated the month",
+                    "detail": f"In {last_month}, your most-played artist alone was roughly {share * 100:.0f}% of plays.",
                     "kind": "highlight",
                 }
             )
         elif share <= 0.12:
             cards.append(
                 {
-                    "headline": "Your plays are spread across many artists",
-                    "detail": f"In {last_month}, your repeat rate was low — no single artist dominated your listening.",
+                    "headline": "Plays spread across many artists",
+                    "detail": f"In {last_month}, no single artist took a big share — listening stayed distributed.",
                     "kind": "info",
                 }
             )
 
     if weekly is not None and not weekly.empty and "artist_stability" in weekly.columns:
-        tail = weekly.sort_values("week").tail(8)["artist_stability"].dropna()
+        wk_col = "week_start" if "week_start" in weekly.columns else "week"
+        tail = weekly.sort_values(wk_col).tail(8)["artist_stability"].dropna()
         if len(tail) >= 4:
             stab = float(tail.mean())
             if stab >= 0.45:
                 cards.append(
                     {
-                        "headline": "Your listening is consistent week to week",
-                        "detail": "Artist overlap between consecutive weeks stayed high recently — similar casts of artists each week.",
+                        "headline": "Stable week-to-week lineup",
+                        "detail": "Recently, many of the same artists carried over from one week to the next.",
                         "kind": "info",
                     }
                 )
             elif stab <= 0.28:
                 cards.append(
                     {
-                        "headline": "Your listening lineup shifts a lot week to week",
-                        "detail": "Low consistency means less overlap of artists between consecutive weeks — more rotation or exploration.",
+                        "headline": "Lineup shifts week to week",
+                        "detail": "Recently, fewer artists overlapped between consecutive weeks — more rotation.",
                         "kind": "highlight",
                     }
                 )
@@ -532,7 +533,7 @@ def _build_personality_cards(
         busiest = y_sorted.loc[y_sorted["total_listens"].idxmax()]
         cards.append(
             {
-                "headline": f"Your busiest year was {int(busiest['year'])}",
+                "headline": f"Busiest year: {int(busiest['year'])}",
                 "detail": f"Across {y1 - y0 + 1} year(s) in this export ({y0}–{y1}), that year had the most total plays.",
                 "kind": "info",
             }
@@ -542,8 +543,8 @@ def _build_personality_cards(
         sn = str(top["season"]).title()
         cards.append(
             {
-                "headline": f"{sn} is your heaviest listening season",
-                "detail": "Totals combine every year — useful for spotting long-run seasonal habits.",
+                "headline": f"{sn} — heaviest season",
+                "detail": "Totals combine every year in this export; useful for long-run seasonal habits.",
                 "kind": "info",
             }
         )
@@ -738,7 +739,6 @@ def build_dashboard_payload(root: Path, username: str) -> dict[str, Any]:
     seasonal_profile = _read_csv_optional(_p("seasonal_features.csv"))
     seasonal_ts = _read_csv_optional(_p("seasonal_timeseries.csv"))
     yearly = _read_csv_optional(_p("yearly_features.csv"))
-    clustered = _read_csv_optional(_p("clustered_weeks.csv"))
     peaks = _read_csv_optional(_p("peak_diversity_weeks.csv"))
     valleys = _read_csv_optional(_p("low_diversity_weeks.csv"))
     transition = _read_csv_optional(_p("genre_transition_matrix.csv"))
@@ -748,7 +748,7 @@ def build_dashboard_payload(root: Path, username: str) -> dict[str, Any]:
         weekly["week_start"] = weekly["week"].str.split("/").str[0]
 
     insights = _generate_insights(
-        weekly, monthly, seasonal_profile, seasonal_ts, yearly, clustered, peaks, transition, u
+        weekly, monthly, seasonal_profile, seasonal_ts, yearly, None, peaks, transition, u
     )
 
     history_path = root / f"{u}_listening_history.csv"
@@ -756,22 +756,14 @@ def build_dashboard_payload(root: Path, username: str) -> dict[str, Any]:
     listening_volume_by_range = _listening_volume_by_ranges(history_path)
     listening_by_hour = _listening_by_hour(history_path)
     trends_monthly = _trends_monthly_payload(monthly, weekly)
-    personality_cards = _build_personality_cards(
-        weekly, monthly, seasonal_profile, yearly
-    )
     weekend_listening = _weekend_split_payload(weekly)
 
-    cluster_summary: list[dict[str, Any]] = []
-    if clustered is not None and "cluster" in clustered.columns:
-        num_cols = [
-            c
-            for c in clustered.select_dtypes(include=[np.number]).columns
-            if c not in ("PC1", "PC2", "cluster")
-        ]
-        use = [c for c in num_cols if c in clustered.columns][:8]
-        if use:
-            grp = clustered.groupby("cluster")[use].mean().reset_index()
-            cluster_summary = _df_records(grp)
+    listening_personality = build_listening_personality(
+        u, weekly, monthly, seasonal_profile, seasonal_ts, yearly
+    )
+    personality_cards = _build_personality_trait_cards(
+        weekly, monthly, seasonal_profile, yearly
+    )
 
     top_transitions: list[dict[str, Any]] = []
     if transition is not None and not transition.empty:
@@ -780,10 +772,14 @@ def build_dashboard_payload(root: Path, username: str) -> dict[str, Any]:
     has_data = weekly is not None and not weekly.empty
 
     date_range: dict[str, str] | None = None
-    if clustered is not None and "week_start" in clustered.columns and not clustered.empty:
-        ws = pd.to_datetime(clustered["week_start"], errors="coerce").dropna()
-        if not ws.empty:
-            date_range = {"start": ws.min().date().isoformat(), "end": ws.max().date().isoformat()}
+    if weekly is not None and not weekly.empty:
+        wk_col = "week_start" if "week_start" in weekly.columns else "week"
+        if wk_col in weekly.columns:
+            ws = pd.to_datetime(
+                weekly[wk_col].astype(str).str.split("/").str[0], errors="coerce"
+            ).dropna()
+            if not ws.empty:
+                date_range = {"start": ws.min().date().isoformat(), "end": ws.max().date().isoformat()}
 
     return {
         "username": u,
@@ -794,20 +790,15 @@ def build_dashboard_payload(root: Path, username: str) -> dict[str, Any]:
         "seasonalProfile": _df_records(seasonal_profile),
         "seasonalTimeseries": _df_records(seasonal_ts),
         "yearly": _df_records(yearly),
-        "clusters": _df_records(clustered),
-        "clusterSummary": cluster_summary,
         "peaks": _df_records(peaks),
         "valleys": _df_records(valleys),
         "topTransitions": top_transitions,
         "insights": insights,
+        "listeningPersonality": listening_personality,
         "personalityCards": personality_cards,
         "trendsMonthly": trends_monthly,
         "listeningVolumeByRange": listening_volume_by_range,
         "listeningByHour": listening_by_hour,
         "weekendListening": weekend_listening,
         "topStuff": top_stuff,
-        "plots": {
-            "pcaScatter": f"/api/plots/{u}/scatter",
-            "pcaTimeline": f"/api/plots/{u}/timeline",
-        },
     }

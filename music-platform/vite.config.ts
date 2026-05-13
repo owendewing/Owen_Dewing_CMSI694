@@ -9,7 +9,7 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
-        // Pipeline can run a long time (Last.fm + Spotify genres + features + PCA)
+        // Pipeline can run a long time (Last.fm + Spotify genres + features)
         timeout: 3_600_000,
       },
     },

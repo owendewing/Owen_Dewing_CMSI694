@@ -15,10 +15,33 @@ import {
   YAxis,
 } from "recharts";
 
+export type ChartCaptionKey =
+  | "volume"
+  | "variety"
+  | "genres"
+  | "newArtist"
+  | "listenHour"
+  | "seasonal"
+  | "weekend";
+
 export type PersonalityCard = {
   headline: string;
   detail: string;
   kind: string;
+};
+
+export type ListeningPersonalityInsight = {
+  title: string;
+  body: string;
+};
+
+export type ListeningPersonalityPayload = {
+  source: "anthropic" | "fallback";
+  tagline: string;
+  insights: ListeningPersonalityInsight[];
+  chartCaptions: Partial<Record<ChartCaptionKey, string>>;
+  /** Present when ANTHROPIC_API_KEY was set but the API call or JSON parse failed. */
+  anthropicError?: string;
 };
 
 export type TrendsMonthlyRow = {
@@ -91,6 +114,7 @@ export type DashboardPayload = {
   seasonalProfile: Record<string, unknown>[];
   /** Raw weekly feature rows from the pipeline (snake_case keys). */
   weekly?: Record<string, unknown>[];
+  listeningPersonality?: ListeningPersonalityPayload;
   personalityCards?: PersonalityCard[];
   trendsMonthly?: TrendsMonthlyRow[];
   yearly?: Record<string, unknown>[];
@@ -126,7 +150,7 @@ const SEASON_DISPLAY: Record<string, { name: string; fill: string }> = {
   fall: { name: "Fall", fill: "#fb923c" },
 };
 
-type MainTabId = "personality" | "trends" | "patterns" | "tops";
+type MainTabId = "tops" | "personality" | "trends" | "patterns";
 type TopRangeId = "week" | "month" | "year";
 type VolumeRangeId = "lastWeek" | "lastMonth" | "lastYear" | "allTime";
 
@@ -436,7 +460,19 @@ export function Dashboard({
 
   if (!data) return null;
 
-  const personality = data.personalityCards ?? [];
+  const lp = data.listeningPersonality;
+  const chartCap = lp?.chartCaptions ?? {};
+  const claudePersonalityCards: PersonalityCard[] | null =
+    lp?.source === "anthropic" &&
+    Array.isArray(lp.insights) &&
+    lp.insights.length >= 3
+      ? lp.insights.map((ins, i) => ({
+          headline: ins.title,
+          detail: ins.body?.trim() ? ins.body : ins.title,
+          kind: i % 2 === 0 ? "highlight" : "info",
+        }))
+      : null;
+  const personality = claudePersonalityCards ?? (data.personalityCards ?? []);
   const trendsRaw = data.trendsMonthly ?? [];
   const trendsChart = trendsRaw.map((row) => ({
     monthLabel: String(row.month),
@@ -460,6 +496,8 @@ export function Dashboard({
     allTime:
       "Each bar is a full calendar year. Great for seeing long-term growth or which years you leaned on music most.",
   };
+  const volumeSubtitle =
+    chartCap.volume?.trim() || volumeSubtitleByRange[volumeRange];
 
   const slicedMonthly =
     monthlyRange === "all"
@@ -592,8 +630,24 @@ export function Dashboard({
             {mainTab === "personality" ? (
               <section className="dashboard-section" aria-labelledby="personality-heading">
                 <h2 id="personality-heading" className="dashboard-section-title">
-                  Your listening personality
+                  {claudePersonalityCards
+                    ? "Your AI-generated listening personality"
+                    : "Your listening personality"}
                 </h2>
+                {!claudePersonalityCards ? (
+                  <p className="dashboard-muted personality-blurb">
+                    Rule-based traits from your feature files.
+                    {lp?.anthropicError ? (
+                      <>
+                        {" "}
+                        <span className="personality-api-hint" title={lp.anthropicError}>
+                          Claude could not run ({lp.anthropicError.slice(0, 80)}
+                          {lp.anthropicError.length > 80 ? "…" : ""}).
+                        </span>
+                      </>
+                    ) : null}
+                  </p>
+                ) : null}
                 {personality.length > 0 ? (
                   <div className="personality-grid">
                     {personality.map((card, i) => (
@@ -608,8 +662,8 @@ export function Dashboard({
                   </div>
                 ) : (
                   <p className="dashboard-muted">
-                    Run a full pipeline fetch to unlock personality cards from your monthly
-                    patterns.
+                    Run <strong>Fetch my data</strong> so monthly feature files exist — traits are derived from those
+                    stats.
                   </p>
                 )}
               </section>
@@ -629,7 +683,7 @@ export function Dashboard({
                   <div className="trends-volume-wrap">
                     <ChartBlock
                       headline="How much you listened"
-                      subtitle={volumeSubtitleByRange[volumeRange]}
+                      subtitle={volumeSubtitle}
                       beforeViz={
                         <>
                           <nav className="trends-volume-tabs" aria-label="Time range for plays">
@@ -714,7 +768,10 @@ export function Dashboard({
 
                   <ChartBlock
                     headline="Artist variety"
-                    subtitle="This line answers “am I exploring more artists lately?” Dots are labeled: Loyalist (repeat favorites), Balanced, Explorer (wider variety)."
+                    subtitle={
+                      chartCap.variety?.trim() ||
+                      "Each month reflects how spread out your plays were across different artists in your monthly export—not genres. Dots: Loyalist (repeat favorites), Balanced, Explorer (wider artist mix)."
+                    }
                     beforeViz={
                       <div className="trends-variety-controls">
                         <nav className="trends-volume-tabs" aria-label="Time range for monthly charts">
@@ -820,7 +877,10 @@ export function Dashboard({
                   {yearlyUniqueGenresChart.length > 0 ? (
                     <ChartBlock
                       headline="How Many Genres You Explored"
-                      subtitle="A simple count of distinct genres seen in your listens per year."
+                      subtitle={
+                        chartCap.genres?.trim() ||
+                        "A simple count of distinct genres seen in your listens per year."
+                      }
                     >
                       <div className="chart-viz-center">
                         <ResponsiveContainer width="100%" height={260}>
@@ -852,7 +912,10 @@ export function Dashboard({
                   {meanNewArtistRate != null ? (
                     <ChartBlock
                       headline="New artist rate"
-                      subtitle="How much of your listening comes from new artist discoveries each week."
+                      subtitle={
+                        chartCap.newArtist?.trim() ||
+                        "How much of your listening comes from new artist discoveries each week."
+                      }
                     >
                       <NewArtistRateRing rate={meanNewArtistRate} />
                     </ChartBlock>
@@ -860,7 +923,10 @@ export function Dashboard({
 
                   <ChartBlock
                     headline="When You Listen Most"
-                    subtitle="Your most active time of day for music listening."
+                    subtitle={
+                      chartCap.listenHour?.trim() ||
+                      "Your most active time of day for music listening."
+                    }
                   >
                     {avgListenHourWeighted != null ? (
                       <ListeningHourDial avgHour={avgListenHourWeighted} />
@@ -874,7 +940,10 @@ export function Dashboard({
                   {seasonalPie.length > 0 ? (
                     <ChartBlock
                       headline="Seasonal listening"
-                      subtitle="Share of all your listens by season (winter = Dec–Feb, spring = Mar–May, summer = Jun–Aug, fall = Sep–Nov)."
+                      subtitle={
+                        chartCap.seasonal?.trim() ||
+                        "Share of all your listens by season (winter = Dec–Feb, spring = Mar–May, summer = Jun–Aug, fall = Sep–Nov)."
+                      }
                     >
                       <ResponsiveContainer width="100%" height={280}>
                         <PieChart margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
@@ -931,7 +1000,11 @@ export function Dashboard({
                   {weekendBars.length > 0 ? (
                     <ChartBlock
                       headline="Weekend vs weekday listening"
-                      subtitle={weekend?.detail ?? ""}
+                      subtitle={
+                        chartCap.weekend?.trim() ||
+                        weekend?.detail ||
+                        "How your listening splits between weekends and weekdays."
+                      }
                     >
                       <ResponsiveContainer width="100%" height={200}>
                         <BarChart
